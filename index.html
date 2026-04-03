@@ -950,6 +950,10 @@ html, body {
 
 </div>
 
+<audio id="notifSound" preload="auto">
+  <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+</audio>
+
 <script type="module">
 import imageCompression from 'https://esm.sh/browser-image-compression@2.0.2';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
@@ -1019,6 +1023,31 @@ const scrollBottomBtn = document.getElementById("scroll-bottom-btn");
 const unreadBadge = document.getElementById("unread-badge");
 
 /* UTIL FUNCTIONS */
+function requestNotificationPermission() {
+  if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+    Notification.requestPermission();
+  }
+}
+requestNotificationPermission();
+
+function notifyNewMessage(senderName, messageText) {
+  const audio = document.getElementById('notifSound');
+  if (audio) {
+    audio.play().catch(e => console.log("Autoplay diblokir oleh browser:", e));
+  }
+
+  if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+    const notif = new Notification(`Pesan baru dari ${senderName}`, {
+      body: messageText,
+      icon: "chat.png"
+    });
+    notif.onclick = function() {
+      window.focus();
+      this.close();
+    };
+  }
+}
+
 async function compressImage(file) {
   const options = { maxSizeMB: 1, maxWidthOrHeight: 1280, useWebWorker: true };
   try {
@@ -1424,14 +1453,27 @@ function listenChat() {
     // Cek posisi sebelum render
     const isAtBottom = (chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight) < 100;
 
-    // Hitung pesan baru jika user sedang scroll ke atas
+    // Hitung pesan baru dan panggil notifikasi jika user sedang scroll ke atas
     if (!isFirstLoad) {
       s.docChanges().forEach(change => {
         if (change.type === "added") {
           const data = change.doc.data();
-          // Hanya tambah angka jika user sedang di atas dan itu bukan pesan miliknya sendiri
-          if (!isAtBottom) {
-            unreadCount++;
+          const isMe = data.user === username;
+          
+          if (!isMe) {
+            // Panggil Notifikasi Suara & Browser
+            let notifText = data.teks || "";
+            if (!notifText && data.files && data.files.length > 0) {
+              notifText = "Mengirim file media/dokumen";
+            } else if (!notifText && data.isVoiceMessage) {
+              notifText = "Mengirim pesan suara";
+            }
+            notifyNewMessage(data.user, notifText);
+
+            // Hanya tambah angka unread jika user sedang di atas
+            if (!isAtBottom) {
+              unreadCount++;
+            }
           }
         }
       });
