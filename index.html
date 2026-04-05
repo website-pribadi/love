@@ -998,9 +998,11 @@ let galleryListener = null;
 let previewFiles = [];
 let currentPreviewIndex = -1;
 
-/* STATE TYPING INDICATOR */
+/* STATE TYPING INDICATOR & ONLINE STATUS */
 let typingTimeout;
 const typingStatusEl = document.getElementById('typing-status');
+let currentGlobalStatusText = "";
+let currentGlobalStatusColor = "#d1f4cc";
 
 /* ELEMENT */
 const chatBox=document.getElementById("chat-box");
@@ -1108,11 +1110,64 @@ function listenToTyping() {
       
       if (typingUsers.length > 0) {
         typingStatusEl.innerText = typingUsers.join(", ") + " sedang mengetik...";
+        typingStatusEl.style.color = "#d1f4cc";
       } else {
-        typingStatusEl.innerText = "";
+        typingStatusEl.innerText = currentGlobalStatusText;
+        typingStatusEl.style.color = currentGlobalStatusColor;
       }
     }
   });
+}
+
+/* ONLINE & LAST SEEN FUNCTIONS */
+async function updateOnlineStatus(statusVal) {
+  if (!user || !username) return;
+  try {
+    await setDoc(doc(db, "status", user.uid), {
+      state: statusVal,
+      last_changed: serverTimestamp(),
+      name: username
+    }, { merge: true });
+  } catch (e) { console.error("Gagal update status:", e); }
+}
+
+window.addEventListener('beforeunload', () => updateOnlineStatus('offline'));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    updateOnlineStatus('online');
+  } else {
+    updateOnlineStatus('offline');
+  }
+});
+
+function listenToUserStatus() {
+  const statusRef = collection(db, "status");
+  onSnapshot(statusRef, (snapshot) => {
+    snapshot.docChanges().forEach((change) => {
+      const data = change.doc.data();
+      const userId = change.doc.id;
+
+      if (user && userId !== user.uid) {
+        renderStatusHeader(data);
+      }
+    });
+  });
+}
+
+function renderStatusHeader(data) {
+  if (data.state === 'online') {
+    currentGlobalStatusText = `${data.name || 'User'} Online`;
+    currentGlobalStatusColor = "#d1f4cc";
+  } else {
+    const waktu = data.last_changed ? formatTime(data.last_changed) : "";
+    currentGlobalStatusText = `${data.name || 'User'} terakhir dilihat pukul ${waktu}`;
+    currentGlobalStatusColor = "#ccc";
+  }
+  
+  if (!typingStatusEl.innerText.includes("sedang mengetik")) {
+    typingStatusEl.innerText = currentGlobalStatusText;
+    typingStatusEl.style.color = currentGlobalStatusColor;
+  }
 }
 
 /* FUNGSI BUBBLE LOGIN */
@@ -1394,9 +1449,11 @@ onAuthStateChanged(auth, async u => {
     username=snap.exists()?snap.data().username:"Anonim";
     document.getElementById("user-info").textContent=`${username}`;
     await saveLoginToFirestore('login');
+    updateOnlineStatus('online');
     listenChat(); 
     listenLogins();
     listenToTyping();
+    listenToUserStatus();
   }catch(error){ console.error("Auth error:", error); }
 });
 
@@ -2072,6 +2129,7 @@ window.logout = async () => {
   if (confirm("Apakah Anda yakin ingin logout?")) {
     try {
       logoutBtn.disabled = true; logoutBtn.innerHTML = "⌛";
+      await updateOnlineStatus('offline');
       await saveLoginToFirestore('logout'); setTimeout(async () => { await signOut(auth); }, 1000);
     } catch (error) { alert("Gagal logout."); logoutBtn.disabled = false; logoutBtn.innerHTML = "⎋"; }
   }
