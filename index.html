@@ -1021,18 +1021,23 @@ const scrollBottomBtn = document.getElementById("scroll-bottom-btn");
 const unreadBadge = document.getElementById("unread-badge");
 
 /* UTIL FUNCTIONS */
+function sanitize(text){
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function linkify(text) {
+  const urlPattern = /(\b(https?|ftp|file):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/ig;
+  return text.replace(urlPattern, '<a href="$1" target="_blank" style="color: #027eb5; text-decoration: underline;">$1</a>');
+}
+
 async function compressImage(file) {
   const options = { maxSizeMB: 1, maxWidthOrHeight: 1280, useWebWorker: true };
   try {
     const compressedFile = await imageCompression(file, options);
     return new File([compressedFile], file.name, { type: file.type, lastModified: Date.now() });
   } catch (error) { return file; }
-}
-
-function sanitize(text){
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
 }
 
 function formatTime(timestamp){
@@ -1612,7 +1617,7 @@ function renderMessage(d) {
     const updatedData = updatedDoc.data();
     const textEl = msgDiv.querySelector(".msg");
     if (textEl && updatedData.teks !== textEl.textContent) {
-      textEl.textContent = updatedData.teks;
+      textEl.innerHTML = linkify(sanitize(updatedData.teks));
       if (updatedData.edited && !msgDiv.querySelector('.edited-label')) {
          const timeSpan = msgDiv.querySelector('.timestamp');
          if(timeSpan) timeSpan.innerHTML = '<i class="fa-solid fa-pencil" style="font-size:10px; margin-right:4px;"></i>' + timeSpan.innerHTML;
@@ -1751,7 +1756,7 @@ function renderMessage(d) {
   if (data.teks) {
     const textEl = document.createElement("div");
     textEl.className = "msg";
-    textEl.textContent = data.teks;
+    textEl.innerHTML = linkify(sanitize(data.teks));
     msgDiv.appendChild(textEl);
   }
 
@@ -1786,83 +1791,119 @@ function renderMessage(d) {
     }).catch(err => console.log("Gagal update read status", err));
   }
 
+  /* --- MENU BUBBLE DENGAN TOMBOL SALIN (JIKA ADA LINK) --- */
   const menu = document.createElement("div");
   menu.className = "bubble-menu " + (isMe ? "outside" : "inside");
-  menu.innerHTML = isMe ? 
-    `<button title="Balas"><i class="fa-solid fa-reply"></i></button>
-     <button title="Edit"><i class="fa-solid fa-pen"></i></button>
-     <button title="Hapus"><i class="fa-solid fa-trash"></i></button>` : 
-    `<button title="Balas"><i class="fa-solid fa-reply"></i></button>`;
   
-  menu.children[0].onclick = () => {
-    const replyPreviewText = data.files && data.files.length > 0 
-        ? (data.files[0].type.startsWith('image') ? '📷 Foto' : (data.files[0].type.startsWith('video') ? '🎥 Video' : '📄 File')) 
-        : data.teks || '[File]';
-    
-    replyData = { user: data.user, text: replyPreviewText, id: d.id };
-    replyText.textContent = `${data.user}: ${replyPreviewText}`;
-    replyBar.style.display = "flex";
-    closeMenus();
-    input.focus();
-  };
+  const hasLink = data.teks && /https?:\/\/[^\s]+/i.test(data.teks);
+  
+  let menuHTML = `<button class="btn-reply" title="Balas"><i class="fa-solid fa-reply"></i></button>`;
+  if (hasLink) {
+    menuHTML += `<button class="btn-copy" title="Salin Tautan"><i class="fa-solid fa-copy"></i></button>`;
+  }
+  if (isMe) {
+    menuHTML += `<button class="btn-edit" title="Edit"><i class="fa-solid fa-pen"></i></button>
+                 <button class="btn-delete" title="Hapus"><i class="fa-solid fa-trash"></i></button>`;
+  }
+  menu.innerHTML = menuHTML;
+  
+  const btnReply = menu.querySelector('.btn-reply');
+  if(btnReply) {
+    btnReply.onclick = () => {
+      const replyPreviewText = data.files && data.files.length > 0 
+          ? (data.files[0].type.startsWith('image') ? '📷 Foto' : (data.files[0].type.startsWith('video') ? '🎥 Video' : '📄 File')) 
+          : data.teks || '[File]';
+      
+      replyData = { user: data.user, text: replyPreviewText, id: d.id };
+      replyText.textContent = `${data.user}: ${replyPreviewText}`;
+      replyBar.style.display = "flex";
+      closeMenus();
+      input.focus();
+    };
+  }
+
+  const btnCopy = menu.querySelector('.btn-copy');
+  if (hasLink && btnCopy) {
+    btnCopy.onclick = () => {
+      const links = data.teks.match(/https?:\/\/[^\s]+/ig);
+      const linkToCopy = links ? links[0] : data.teks;
+      navigator.clipboard.writeText(linkToCopy).then(() => {
+        btnCopy.innerHTML = '<i class="fa-solid fa-check" style="color: #25D366;"></i>';
+        setTimeout(() => {
+          btnCopy.innerHTML = '<i class="fa-solid fa-copy"></i>';
+          closeMenus();
+        }, 1000);
+      }).catch(() => {
+        alert("Gagal menyalin tautan");
+        closeMenus();
+      });
+    };
+  }
 
   if(isMe){
-    menu.children[1].onclick = async () => {
-      closeMenus();
-      const msgElement = msgDiv.querySelector(".msg");
-      if (!msgElement) return; 
-      
-      const originalText = msgElement.textContent;
-      msgElement.contentEditable = true;
-      msgElement.focus();
-      msgElement.classList.add("editing-active");
-
-      const saveEdit = async () => {
-        if (msgElement.contentEditable !== "true") return;
-        const newText = msgElement.textContent.trim();
-        msgElement.contentEditable = false;
-        msgElement.classList.remove("editing-active");
+    const btnEdit = menu.querySelector('.btn-edit');
+    if(btnEdit) {
+      btnEdit.onclick = async () => {
+        closeMenus();
+        const msgElement = msgDiv.querySelector(".msg");
+        if (!msgElement) return; 
         
-        if (newText !== "" && newText !== originalText) {
+        const originalText = msgElement.textContent;
+        msgElement.textContent = originalText; 
+        msgElement.contentEditable = true;
+        msgElement.focus();
+        msgElement.classList.add("editing-active");
+
+        const saveEdit = async () => {
+          if (msgElement.contentEditable !== "true") return;
+          const newText = msgElement.textContent.trim();
+          msgElement.contentEditable = false;
+          msgElement.classList.remove("editing-active");
+          
+          if (newText !== "" && newText !== originalText) {
+            try {
+              await updateDoc(doc(db, "pesan", d.id), {
+                teks: newText,
+                edited: true
+              });
+            } catch (error) {
+              console.error("Gagal edit:", error);
+              msgElement.innerHTML = linkify(sanitize(originalText));
+              alert("Gagal mengedit pesan");
+            }
+          } else {
+            msgElement.innerHTML = linkify(sanitize(originalText));
+          }
+        };
+
+        msgElement.onblur = saveEdit;
+        msgElement.onkeydown = (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            saveEdit();
+          }
+        };
+      };
+    }
+
+    const btnDelete = menu.querySelector('.btn-delete');
+    if(btnDelete) {
+      btnDelete.onclick = async () => {
+        closeMenus();
+        if (confirm("Hapus pesan ini untuk semua orang?")) {
           try {
-            await updateDoc(doc(db, "pesan", d.id), {
-              teks: newText,
-              edited: true
-            });
+            if (data.files && data.files.length > 0) {
+              const paths = data.files.map(f => f.path);
+              await supabase.storage.from('chat-storage').remove(paths);
+            }
+            await deleteDoc(doc(db, "pesan", d.id));
           } catch (error) {
-            console.error("Gagal edit:", error);
-            msgElement.textContent = originalText;
-            alert("Gagal mengedit pesan");
+            console.error("Gagal hapus:", error);
+            alert("Gagal menghapus pesan");
           }
-        } else {
-          msgElement.textContent = originalText;
         }
       };
-
-      msgElement.onblur = saveEdit;
-      msgElement.onkeydown = (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          saveEdit();
-        }
-      };
-    };
-
-    menu.children[2].onclick = async () => {
-      closeMenus();
-      if (confirm("Hapus pesan ini untuk semua orang?")) {
-        try {
-          if (data.files && data.files.length > 0) {
-            const paths = data.files.map(f => f.path);
-            await supabase.storage.from('chat-storage').remove(paths);
-          }
-          await deleteDoc(doc(db, "pesan", d.id));
-        } catch (error) {
-          console.error("Gagal hapus:", error);
-          alert("Gagal menghapus pesan");
-        }
-      }
-    };
+    }
   }
 
   msgDiv.oncontextmenu = (e) => {
